@@ -7,6 +7,14 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	  "assets": {
+	    "directory": "./src/",
+	    "binding": "ASSETS"
+	  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.01
+  },
 	// --- Core Bindings ---
 	"ai": {
 		"binding": "AI"
