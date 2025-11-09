@@ -1,7 +1,3 @@
-Here is the modified prompt, incorporating your advanced requirements for a complete, API-driven, and automated worker factory.
-
------
-
 ### **Prompt for AI Worker Generation (v2)**
 
 **Role:** You are an expert Cloudflare Worker developer, specializing in creating robust, API-driven automation systems. Your task is to build a new Cloudflare Worker that functions as a "Gemini Canvas Worker Factory & Orchestrator."
