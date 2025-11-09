@@ -1,93 +1,101 @@
-# AGENT INSTRUCTIONS: canvas_to_worker
+AGENT INSTRUCTIONS: canvas_to_worker Factory
 
-This document is for AI agents (like Jules) interacting with the `canvas_to_worker` Cloudflare Worker.
+1. Overview
 
-## 1. Project Purpose
+This worker is an orchestration factory. It does not just serve content; it actively provisions infrastructure. Its purpose is to take raw HTML/JS/CSS (a "Canvas artifact") and turn it into a fully independent Cloudflare Worker project with its own GitHub repo, CI/CD pipeline, and an active improvement task assigned to the Jules agent.
 
-This worker is an **automated factory and orchestrator**. Its primary purpose is to convert a Gemini Canvas artifact (raw HTML/JS/CSS) into a live, production-ready Cloudflare Worker, complete with a dedicated GitHub repository, CI/CD, and a task for an improvement agent (Jules).
+2. Architecture & Tech Stack
 
-## 2. Core Architecture
+Framework: Hono (v4+) with @hono/zod-openapi for typed endpoints and auto-generated documentation.
 
-* **Framework:** Hono
-* **API:** Fully typed RESTful and WebSocket API.
-* **API Spec:** Dynamically generated OpenAPI 3.1.0 spec at `/openapi.json` and `/openapi.yaml`. All API routes are built from Zod schemas for validation and type safety.
-* **Database:** Uses a D1 database (`DB` binding) via Drizzle ORM for all internal logging and project tracking.
-* **Logging:** Real-time deployment and orchestration logs are streamed to the client via a WebSocket (`/ws`).
+Database: D1 (binding: DB) accessed via Drizzle ORM. Used for structured logging of every operation.
 
-## 3. Internal D1 Database Schema (`DB` Binding)
+AI: Workers AI (binding: AI) used for refining raw user prompts before sending them to Jules.
 
-This worker logs all its own activities. When debugging or extending, query this D1 database:
+Logging:
 
-* **`projects`**: Tracks every new worker project this factory creates.
-    * `id`: Unique project ID.
-    * `repositoryName`: Name of the new GitHub repo.
-    * `repoUrl`: URL of the new GitHub repo.
-    * `workerUrl`: The `.workers.dev` URL of the newly deployed canvas.
-    * `status`: e.g., 'pending', 'deploying', 'live', 'failed'.
-    * `julesTaskId`: The ID returned from the `JULES_API` after handoff.
-* **`operations_log`**: A detailed, step-by-step log for each project.
-    * `id`: Log entry ID.
-    * `project_id`: Foreign key to `projects`.
-    * `step_name`: (e.g., 'create_repo', 'generate_wrangler', 'provision_worker', 'handoff_to_jules').
-    * `status`: 'success' or 'error'.
-    * `message`: Details or error message.
-    * `timestamp`: Time of the event.
-* **`api_requests`**: Logs all incoming API requests for security and debugging.
-    * `endpoint`: e.g., `/deploy`.
-    * `method`: e.g., `POST`.
-    * `payload`: (Partial) request body.
-    * `ip_address`: Requesting IP.
+Persistent: D1 operations_log table.
 
-## 4. Service Bindings (External Dependencies)
+Real-time: Durable Object LogStreamerDO (binding: LOG_STREAMER) which broadcasts to WebSocket clients connected to /ws.
 
-This worker **orchestrates** other services. Its core logic depends entirely on these bindings.
+3. External Dependencies (Service Bindings)
 
-* **`AI: Ai`**
-    * **Purpose:** Used to process the user's natural language `improvementPrompt`.
-    * **Action:** It refines the user's raw text into a structured, optimized, and context-rich prompt *for* the Jules agent, ensuring Jules has clear instructions.
+This worker cannot function without these bindings. It delegates all heavy lifting to specialized microservices:
 
-* **`CORE_GITHUB_API: Service`**
-    * **Purpose:** Manages all GitHub-related tasks.
-    * **Actions:**
-        1.  Creates a new **private** GitHub repository for the project.
-        2.  Commits and pushes the initial set of files (`index.html`, `wrangler.jsonc`, `package.json`, `JULES_PROMPT.md`, `AGENTS.md`) to the new repo.
+Binding
 
-* **`CORE_CF_MGMT_API: Service`**
-    * **Purpose:** This is the Cloudflare "easy button." It provisions all Cloudflare resources.
-    * **Actions:**
-        1.  Creates a new Cloudflare Worker project.
-        2.  Links this new worker to the new GitHub repository.
-        3.  Sets up the CI/CD trigger (e.g., "Deploy on push to `main`").
-        4.  Sets the CI/CD deploy command to `npm install && npm run deploy`.
-        5.  Triggers the **first deployment** to make the canvas HTML live.
-        6.  *(Self-Note: This service is also what the "Wrangler Factory" will eventually call to provision bindings like D1/R2 for the *new* worker, but this factory calls it to provision the worker itself.)*
+Service Name
 
-* **`JULES_API: Service`**
-    * **Purpose:** Asynchronous handoff for code improvement.
-    * **Action:** After the new worker is live (serving the canvas), this factory calls the `JULES_API` to create a new improvement task. It passes the `repoUrl`, the AI-refined prompt, and the full `wrangler.jsonc` (so Jules knows what bindings are available).
+Purpose
 
-## 5. Core API Endpoints & Orchestration
+CORE_GITHUB_API
 
-* **`GET /`**: Serves the frontend UI.
-* **`GET /openapi.json` | `/openapi.yaml`**: **(Agent-Critical)** Provides the full, dynamic OpenAPI 3.1.0 spec. **Always check this for `operationId`s and schemas.**
-* **`GET /ws`**: WebSocket endpoint. The frontend uses this to receive real-time log updates for the `POST /deploy` operation.
-* **`POST /deploy`**: The main orchestration flow.
-    1.  **Input:** `repositoryName`, `canvasCode`, `improvementPrompt`.
-    2.  **Validate & Log:** Validates input with Zod, logs to `api_requests`, and creates a `projects` entry in D1.
-    3.  **Refine Prompt:** Calls `AI` binding to refine `improvementPrompt`.
-    4.  **Create Repo:** Calls `CORE_GITHUB_API` to create the private repo.
-    5.  **Run "Wrangler Factory":** A critical internal function.
-        * It generates a `wrangler.jsonc` for the *new* project.
-        * It **always** configures the worker to serve the `index.html` (the `canvasCode`).
-        * It analyzes the `improvementPrompt` for keywords (e.g., "database," "AI," "storage").
-        * It provisions any needed bindings (D1, R2, AI) by adding them to the generated `wrangler.jsonc`. **Note: The *provisioning* of the resources themselves is handled by `CORE_CF_MGMT_API`, but the *configuration* is generated here.**
-    6.  **Generate Files:** Creates `index.html`, `package.json` (with `deploy` scripts that run D1 migrations), `JULES_PROMPT.md`, and this `AGENTS.md` file.
-    7.  **Push Files:** Calls `CORE_GITHUB_API` to push all files to the new repo.
-    8.  **Deploy Worker:** Calls `CORE_CF_MGMT_API` to create the worker, link the repo, set up CI/CD, and trigger the first build.
-    9.  **Respond to User:** Waits for the worker URL and responds to the user with `{"success": true, "workerUrl": "...", "repoUrl": "..."}`.
-    10. **Async Handoff:** *After* responding, calls `JULES_API` with the `repoUrl` and the refined prompt to start the improvement task.
+core-github-api
 
-## 6. Development Instructions
+Creating private repos, committing initial code (index.html, wrangler.jsonc).
 
-* **Modifying API:** All API changes **MUST** be made in the Hono routes and their corresponding Zod schemas. This is required to keep the `/openapi.json` spec accurate for agent consumption.
-* **Database:** All database changes **MUST** be accompanied by a new Drizzle migration file.
+CORE_CF_MGMT_API
+
+core-cloudflare-management-api
+
+Provisioning the new worker, setting up its CI/CD triggers, and triggering the first deployment.
+
+JULES_API
+
+core-jules-api
+
+Receiving the handoff after the initial deployment to begin iterative improvements.
+
+4. Internal Database Schema (D1)
+
+Agents debugging this worker should query these tables in the DB binding:
+
+projects
+
+id (TEXT, PK): UUID of the project.
+
+repository_name (TEXT): Name of created GH repo.
+
+repo_url (TEXT): Full URL to the GH repo.
+
+worker_url (TEXT): The live URL of the deployed canvas.
+
+status (TEXT): pending -> provisioning -> deployed -> handed_off (or failed).
+
+operations_log
+
+id (INT, PK, Auto): Log sequence.
+
+project_id (TEXT, FK): Links to projects.id.
+
+step (TEXT): e.g., INIT_REPO, GENERATE_WRANGLER, PROVISION_WORKER, JULES_HANDOFF.
+
+status (TEXT): started, success, error.
+
+details (TEXT): JSON payload with extra info or error stack traces.
+
+5. Key Orchestration Logic (POST /deploy)
+
+The core logic resides in the POST /deploy handler. It follows this strict sequence:
+
+Validation & Init: Validate Zod schema, create projects record (status: pending).
+
+Prompt Refinement (Async): Call AI to turn the user's rough request into a structured Jules prompt.
+
+Repo Creation: Call CORE_GITHUB_API to make the private repo.
+
+Artifact Generation:
+
+Create index.html from user input.
+
+Dynamic wrangler.jsonc: Analyze user prompt for keywords (e.g., "database" -> add D1 binding config). Always include standard static asset config.
+
+Create package.json with a deploy script that handles migrations if necessary.
+
+Initial Push: Call CORE_GITHUB_API to push these files to main.
+
+Provisioning: Call CORE_CF_MGMT_API to create the actual Worker and set up the CI/CD connection to the new repo.
+
+User Response: Return 200 OK with the new repo_url and worker_url immediately once provisioned.
+
+Handoff (Async): After responding to the user, call JULES_API with the new repo details to start the improvement cycle.
