@@ -1,0 +1,87 @@
+{
+  "$schema": "https://schema.cloudflare.com/workers-wrangler/v3/9",
+  "name": "canvas-to-worker",
+  "main": "src/index.ts", // Assuming your Hono entrypoint is here
+  "compatibility_date": "2024-05-15",
+  "platform": "workers",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // --- Core Bindings ---
+
+  "ai": {
+    "binding": "AI"
+  },
+
+  // --- D1 Database (For this factory's internal logging) ---
+  "d1_databases": [
+    {
+      "binding": "DB", // Used for logging projects, operations, and API requests
+      "database_name": "canvas_factory_db",
+      "database_id": "YOUR_CANVAS_FACTORY_DB_ID_GOES_HERE",
+      "preview_database_id": "YOUR_PREVIEW_DB_ID"
+    }
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "database": "DB",
+      "path": "drizzle/migrations"
+    }
+  ],
+
+  // --- KV Namespace (For general caching, e.g., session state) ---
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "YOUR_FACTORY_KV_ID_GOES_HERE",
+      "preview_id": "YOUR_PREVIEW_KV_ID"
+    }
+  ],
+
+  // --- Observability (Workers Analytics Engine) ---
+  "analytics_engine_datasets": [
+    {
+      "binding": "OBSERVABILITY", // For analytics on factory operations
+      "dataset": "canvas_factory_analytics"
+    }
+  ],
+
+  // --- WebSocket Logging (Durable Object) ---
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "LOG_STREAMER", // DO for streaming deployment logs via WebSocket
+        "class_name": "LogStreamerDO"
+      }
+    ]
+  },
+
+  // --- Service Bindings (CRITICAL) ---
+  // These are the RPC bindings to your other core workers.
+  "services": [
+    {
+      // For creating repos and pushing files
+      "binding": "CORE_GITHUB_API",
+      "service": "core-github-api" // <-- REPLACE with the correct deployed worker name
+    },
+    {
+      // For tasking Jules with the improvement work
+      "binding": "JULES_API",
+      "service": "core-jules-api" // <-- REPLACE with the correct deployed worker name
+    },
+    {
+      // For provisioning new workers, setting up CI/CD, and provisioning resources
+      "binding": "CORE_CF_MGMT_API",
+      "service": "core-cloudflare-management-api" // <-- REPLACE with the correct deployed worker name
+    }
+  ],
+
+  // --- Environment Variables ---
+  "vars": {
+    "MY_VAR": "my-value"
+  },
+  "secrets": [
+    "GITHUB_TOKEN", // Example secret this factory might need
+    "JULES_API_KEY" // Example secret for auth with Jules
+  ]
+}
